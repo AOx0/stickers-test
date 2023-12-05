@@ -1,19 +1,60 @@
 use maud::{html, Markup, DOCTYPE, PreEscaped};
 use axum::{Router, routing::get};
+use strum::{EnumIter, IntoEnumIterator};
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 
 #[tokio::main]
 async fn main() {
     let app = Router::new()
-        .route("/", get(index))
+        .route("/", get(root))
+        .route("/other", get(other))
         .fallback_service(ServeDir::new("./static/"));
 
     axum::serve(TcpListener::bind("[::]:8080").await.unwrap(), app).await.unwrap();
 }
 
+async fn root() -> Markup {
+    Template(Section::Home, html!{
+        h1."text-4xl".font-bold ."h-[1000px]" {
+            "Hello, world!"
+        }
+    })  
+}
 
-async fn index() -> Markup {
+async fn other() -> Markup {
+    Template(Section::Other, html!{
+        h1."text-4xl".font-bold ."h-[1000px]" {
+            "Other!"
+        }
+    })  
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
+enum Section {
+    Home,
+    Other,
+}
+
+impl Section {
+    fn map_path(&self) -> &'static str {
+        match self {
+            Self::Home => "/",
+            Self::Other => "/other",
+        }
+    }
+}
+
+impl maud::Render for Section {
+    fn render(&self) -> Markup {
+        html! {
+            (format!("{:?}", self))
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+fn Template(section: Section, content: Markup) -> Markup {
     html! {
         (DOCTYPE)
         html lang="es" {
@@ -61,14 +102,30 @@ async fn index() -> Markup {
                 nav
                     .sticky."top-0"."z-50".w-full
                     .flex.flex-row.justify-between.items-center
-                    ."p-3"
+                    ."px-6"."py-4"
                     ."border-b"."border-zinc-100/95"."dark:border-zinc-800/95"
                     .backdrop-blur
                     ."supports-[backdrop-filter]:bg-background/60"
                 {
-                    div {
-                        "Aaa"
+                    div.flex.flex-row.items-center."space-x-9" {
+                        h1 { "Aaa" }
+                        div
+                            .flex.flex-row.items-center
+                            .text-sm.font-medium."space-x-4"
+                            .text-foreground.transition-colors 
+                        {
+                            @for s in Section::iter() {
+                                @if s == section {
+                                    a."text-foreground/80" 
+                                    href={ (s.map_path()) } { (s) }
+                                } @else {
+                                    a."hover:text-foreground/80"."text-foreground/60" 
+                                    href={ (s.map_path()) } { (s) }
+                                }
+                            }
+                        }
                     }
+
                     button x-on:click="isDark = toggleDarkMode()" {
                         div."dark:hidden block" {
                             (PreEscaped(include_str!("../static/sun.svg")))
@@ -79,22 +136,27 @@ async fn index() -> Markup {
                     }
                 }
 
-                div ."h-[1000px]" {
-                    p { "Hello, world!" }
-                }
+                main { (content) }
 
-                footer
-                    .flex.flex-col.mt-auto 
-                    .bg-background
-                {
-                    div."p-4" {
-                        p.text-xl.font-bold {
-                            "\u{22EF}"
-                        }
-                        p.text-xs {
-                            "Made with Axum, Maud, Alpine, HTMX & Tailwind."
-                        }
-                    }
+                (Footer())
+            }
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+fn Footer() -> Markup {
+    html! {
+        footer
+            .flex.flex-col.mt-auto 
+            .bg-background
+        {
+            div."px-6"."py-4" {
+                p.text-xl.font-bold {
+                    "\u{22EF}"
+                }
+                p.text-xs {
+                    "Made with Axum, Maud, Alpine, HTMX & Tailwind."
                 }
             }
         }
