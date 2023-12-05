@@ -22,7 +22,7 @@ async fn index() -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 link href="/style.css" rel="stylesheet";
-                script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" {}
+                script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" {}
                 script {
                     "
                         function toggleDarkMode() {
@@ -35,6 +35,10 @@ async fn index() -> Markup {
                         }
 
                         function loadDarkMode() {
+                            if (localStorage.getItem('dark') === null) {
+                                localStorage.setItem('dark', 'true');
+                            }
+
                             const isDarkMode = localStorage.getItem('dark') === 'true';
                             const html = document.querySelector('html');
                             html.classList.toggle('dark', isDarkMode);
@@ -46,8 +50,7 @@ async fn index() -> Markup {
             }
 
             body.flex.flex-col.min-h-screen.relative
-                .bg-white."dark:bg-zinc-900"
-                .text-black."dark:text-gray-200"
+                .bg-background.text-foreground
                 x-data="{ 
                     isDark: false,
                     init() {
@@ -59,10 +62,9 @@ async fn index() -> Markup {
                     .sticky."top-0"."z-50".w-full
                     .flex.flex-row.justify-between.items-center
                     ."p-3"
-                    ."border-b-2"."border-zinc-100/95"."dark:border-zinc-800/95"
+                    ."border-b"."border-zinc-100/95"."dark:border-zinc-800/95"
                     .backdrop-blur
-                    ."supports-[backdrop-filter]:bg-white/60"
-                    ."supports-[backdrop-filter]:dark:bg-zinc-900/60"
+                    ."supports-[backdrop-filter]:bg-background/60"
                 {
                     div {
                         "Aaa"
@@ -83,14 +85,14 @@ async fn index() -> Markup {
 
                 footer
                     .flex.flex-col.mt-auto 
-                    ."bg-zinc-100"."dark:bg-black" 
+                    .bg-background
                 {
                     div."p-4" {
                         p.text-xl.font-bold {
                             "\u{22EF}"
                         }
                         p.text-xs {
-                            "Made with Maud, Alpine, HTMX, Axum, & Tailwind."
+                            "Made with Axum, Maud, Alpine, HTMX & Tailwind."
                         }
                     }
                 }
