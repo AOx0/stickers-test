@@ -95,6 +95,9 @@ impl FromRequestParts<AppState> for Session
         
         let token = jar.get("token").ok_or(Error::AuthNoToken)?.value().to_string();
 
-        Ok(Session::new(token, state.surreal.get().await.unwrap()).await.unwrap())
+        Ok(Session::new(token, state.surreal.get().await.map_err(|e| {
+            println!("Auth error: {:?}", e);
+            Error::AuthFailed
+        })?).await?)
     }
 }

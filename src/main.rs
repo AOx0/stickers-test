@@ -23,7 +23,6 @@ struct Ports {
 #[tokio::main]
 async fn main() {
     dotenv::dotenv().ok();
-    let host = std::env::var("HOST").expect("HOST must be set");
     let surreal = std::env::var("SURREAL").expect("SURREAL must be set");
     let s_size = std::env::var("POOL_SIZE").expect("POOL_SIZE must be set");
 
@@ -55,6 +54,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(root))
         .route("/other", get(other))
+        .route("/signout", get(perform_signout))
         .merge(admin)
         .merge(auth)
         .fallback_service(ServeDir::new("./static/"))
@@ -129,10 +129,15 @@ struct User {
     is_admin: Option<bool>,
 }
 
+async fn perform_signout(State(state): State<AppState>, jar: PrivateCookieJar) -> impl IntoResponse {
+    (
+        jar.remove(Cookie::named("token")),
+        Redirect::to("/")
+    )
+}
 
 async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Form(info): Form<UserInfo>) -> impl IntoResponse {
     let db = state.surreal.get().await.unwrap();
-    let username = info.username.clone();
     
     let sign_res = db.signin(Scope {
         namespace: "demo",
@@ -345,6 +350,9 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                             (Ref("Sign in", "/signin", false))
                             
                             (Ref("Sign up", "/signup", false))
+                        } @else { 
+                            (Ref("Sign out", "/signout", false))
+                            
                         }
 
                         button x-on:click="isDark = toggleDarkMode()" {
