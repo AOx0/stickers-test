@@ -1,17 +1,25 @@
 use auth::Session;
 use axum_extra::extract::{PrivateCookieJar, cookie::Cookie};
+use axum_server::tls_rustls::RustlsConfig;
 use maud::{html, Markup, DOCTYPE, PreEscaped};
-use axum::{Router, routing::get, response::{IntoResponse, Redirect, Response}, extract::{State, Request}, Form, middleware::{self, Next}, http::StatusCode};
+use axum::{Router, routing::get, response::{IntoResponse, Redirect, Response}, extract::{State, Request, Host}, Form, middleware::{self, Next}, http::{StatusCode, Uri}, BoxError};
 use state::AppState;
 use strum::{EnumIter, IntoEnumIterator};
 use surrealdb::opt::auth::Scope;
 use tokio::net::TcpListener;
+use axum::handler::HandlerWithoutStateExt;
 use tower_http::services::ServeDir;
 
 pub mod pool;
 pub mod auth;
 pub mod state;
 pub mod error;
+
+#[derive(Clone, Copy)]
+struct Ports {
+    http: u16,
+    https: u16,
+}
 
 #[tokio::main]
 async fn main() {
@@ -21,6 +29,20 @@ async fn main() {
     let s_size = std::env::var("POOL_SIZE").expect("POOL_SIZE must be set");
 
     let state = state::AppState::new(pool::SPool::new(surreal.as_str(), s_size.parse::<usize>().unwrap()));
+
+    let ports = Ports {
+        http: 80,
+        https: 443,
+    };
+
+    let config = RustlsConfig::from_pem_file(
+        "/Users/alejandro/certificate.pem",
+        "/Users/alejandro/private-key.pem",
+    )
+    .await
+    .unwrap();
+
+    tokio::spawn(redirect_http_to_https(ports));
 
     let auth : Router<AppState> = Router::new()
         .route("/signin", get(signin).post(perform_signin))
@@ -36,9 +58,43 @@ async fn main() {
         .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state);
         
- 
+    axum_server::bind_rustls(format!("[::]:{}", ports.https).parse().unwrap(), config)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
+}
 
-    axum::serve(TcpListener::bind(host).await.unwrap(), app).await.unwrap();
+#[allow(dead_code)]
+async fn redirect_http_to_https(ports: Ports) {
+    fn make_https(host: String, uri: Uri, ports: Ports) -> Result<Uri, BoxError> {
+        let mut parts = uri.into_parts();
+
+        parts.scheme = Some(axum::http::uri::Scheme::HTTPS);
+
+        if parts.path_and_query.is_none() {
+            parts.path_and_query = Some("/".parse().unwrap());
+        }
+
+        let https_host = host.replace(&ports.http.to_string(), &ports.https.to_string());
+        parts.authority = Some(https_host.parse()?);
+
+        Ok(Uri::from_parts(parts)?)
+    }
+
+    let redirect = move |Host(host): Host, uri: Uri| async move {
+        match make_https(host, uri, ports) {
+            Ok(uri) => Ok(Redirect::permanent(&uri.to_string())),
+            Err(error) => {
+                println!("Redirect error: {:?}", error);
+                Err(StatusCode::BAD_REQUEST)
+            }
+        }
+    };
+
+    let listener = tokio::net::TcpListener::bind(format!("[::]:{}", ports.http)).await.unwrap();
+    axum::serve(listener, redirect.into_make_service())
+        .await
+        .unwrap();
 }
 
 async fn middleware_redirect_already_logged_in(_: State<AppState>, session: Result<Session, error::Error>, req: Request, next: Next) -> Response {
@@ -94,7 +150,7 @@ async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Fo
 
 async fn signin(session: Option<Session>) -> Markup {
     println!("Session: {:?}", session);
-    Template(Section::Home, Auth::from(session), html!{
+    Template(Section::Home, Auth::from(session.as_ref()), html!{
         div.flex.flex-col.justify-center {
             div."flex flex-col items-center space-y-4" {
                 h1."text-4xl".font-bold {
@@ -112,16 +168,17 @@ async fn signin(session: Option<Session>) -> Markup {
     })  
 }
 
-async fn admin(session: Option<Session>) -> Markup {
-    Template(Section::Admin, Auth::from(session), html!{
-        h1."text-4xl".font-bold ."h-[1000px]" {
-            "Admin!"
+async fn admin(session: Session) -> Markup {
+
+    Template(Section::Admin, Auth::Admin(&session), html!{
+        div."p-4".flex.flex-col {
+            h1."text-4xl".font-bold { "Hola, " (session.first_name()) "!" }
         }
     })  
 }
 
 async fn root(session: Option<Session>) -> Markup {
-    Template(Section::Home, Auth::from(session), html!{
+    Template(Section::Home, Auth::from(session.as_ref()), html!{
         h1."text-4xl".font-bold ."h-[1000px]" {
             "Hello, world!"
         }
@@ -129,7 +186,7 @@ async fn root(session: Option<Session>) -> Markup {
 }
 
 async fn other(session: Option<Session>) -> Markup {
-    Template(Section::Other, Auth::from(session), html!{
+    Template(Section::Other, Auth::from(session.as_ref()), html!{
         h1."text-4xl".font-bold ."h-[1000px]" {
             "Other!"
         }
@@ -161,30 +218,24 @@ impl maud::Render for Section {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Auth {
-    User,
-    Admin,
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Auth<'a> {
+    User(&'a Session),
+    Admin(&'a Session),
     Guest,
 }
 
 
-impl From<bool> for Auth {
-    fn from(b: bool) -> Self {
-        if b {
-            Self::Admin
-        } else {
-            Self::User
-        }
-    }
-}
-
-impl From<Option<Session>> for Auth {
-    fn from(s: Option<Session>) -> Self {
-        if s.is_none() {
-            Self::Guest
-        } else {
-            Self::from(Session::is_some_admin(s))
+impl<'a> From<Option<&'a Session>> for Auth<'a> {
+    fn from(s: Option<&'a Session>) -> Self {
+        match s {
+            Some(s) if s.is_admin() => {
+                Self::Admin(s)
+            },
+            Some(s) => {
+                Self::User(s)
+            },
+            None => Self::Guest
         }
     }
 }
@@ -270,7 +321,7 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                             .text-sm.font-medium."space-x-4"
                             .text-foreground.transition-colors 
                         {
-                            @if let Auth::Admin = auth {
+                            @if let Auth::Admin(_) = auth {
                                 (Ref(Section::Admin, Section::Admin.map_path(), section == Section::Admin))
                             } 
 
@@ -290,10 +341,10 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                         }
 
                         button x-on:click="isDark = toggleDarkMode()" {
-                            div."dark:hidden block" {
+                            div."dark:hidden".block {
                                 (PreEscaped(include_str!("../static/sun.svg")))
                             }
-                            div."hidden dark:block" {
+                            div.hidden."dark:block" {
                                 (PreEscaped(include_str!("../static/moon.svg")))
                             }
                         }

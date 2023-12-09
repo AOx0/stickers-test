@@ -5,7 +5,7 @@ use crate::pool::SurrealConn;
 use crate::state::AppState;
 use crate::error::Error;
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Session {
     #[serde(skip)]
     token: String,
@@ -59,11 +59,20 @@ impl Session {
         self.is_admin
     }
 
-    pub fn is_some_admin(s: Option<Session>) -> bool {
-        match s {
-            Some(s) => s.is_admin(),
-            None => false
-        }
+    pub fn id(&self) -> &Thing {
+        &self.id
+    }
+
+    pub fn first_name(&self) -> &str {
+        &self.first_name
+    }
+
+    pub fn last_name(&self) -> &str {
+        &self.last_name
+    }
+
+    pub fn email(&self) -> &str {
+        &self.email
     }
 }
 
