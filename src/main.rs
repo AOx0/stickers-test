@@ -6,7 +6,6 @@ use axum::{Router, routing::get, response::{IntoResponse, Redirect, Response}, e
 use state::AppState;
 use strum::{EnumIter, IntoEnumIterator};
 use surrealdb::opt::auth::Scope;
-use tokio::net::TcpListener;
 use axum::handler::HandlerWithoutStateExt;
 use tower_http::services::ServeDir;
 
@@ -49,10 +48,14 @@ async fn main() {
         .route("/signup", get(signin))
         .route_layer(middleware::from_fn_with_state(state.clone(), middleware_redirect_already_logged_in));
 
+    let admin : Router<AppState> = Router::new()
+        .route("/admin", get(admin))
+        .route_layer(middleware::from_fn_with_state(state.clone(), middleware_assert_is_admin));
+
     let app = Router::new()
         .route("/", get(root))
         .route("/other", get(other))
-        .route("/admin", get(admin))
+        .merge(admin)
         .merge(auth)
         .fallback_service(ServeDir::new("./static/"))
         .layer(tower_http::compression::CompressionLayer::new())
@@ -105,6 +108,16 @@ async fn middleware_redirect_already_logged_in(_: State<AppState>, session: Resu
     next.run(req).await
 }
 
+async fn middleware_assert_is_admin(_: State<AppState>, session: Result<Session, error::Error>, req: Request, next: Next) -> Response {
+    if let Ok(session) = session {
+        if session.is_admin() {
+            return next.run(req).await;
+        }
+    }
+    
+    Redirect::to("/").into_response()
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 struct UserInfo {
     username: String,
@@ -130,14 +143,8 @@ async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Fo
 
     match sign_res {
         Ok(token) => {
-            let is_admin: User = db.select(("user", &username)).await.unwrap().unwrap();
-
-            let jar = jar.add(Cookie::new("token", token.as_insecure_token().to_string()));
-            let jar = jar.add(Cookie::new("user_id", format!("user:{}", username)));
-            let jar = jar.add(Cookie::new("is_admin", is_admin.is_admin.unwrap_or_default().to_string()));
-
             (
-                jar,
+                jar.add(Cookie::new("token", token.as_insecure_token().to_string())),
                 Redirect::to("/"),
             ).into_response()
         },

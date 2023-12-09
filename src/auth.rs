@@ -10,6 +10,7 @@ pub struct Session {
     #[serde(skip)]
     token: String,
     id: Thing,
+    #[serde(default)]
     is_admin: bool,
     first_name: String,
     last_name: String,
