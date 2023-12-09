@@ -27,7 +27,6 @@ async fn main() {
         .route("/signup", get(signin))
         .route_layer(middleware::from_fn_with_state(state.clone(), middleware_redirect_already_logged_in));
 
-
     let app = Router::new()
         .route("/", get(root))
         .route("/other", get(other))
@@ -218,7 +217,7 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 link href="/style.css" rel="stylesheet";
-                script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" {}
+                script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" {}
                 script {
                     "
                         function toggleDarkMode() {
@@ -241,6 +240,8 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
 
                             return isDarkMode;
                         }
+
+                        loadDarkMode();
                     "
                 }
             }
