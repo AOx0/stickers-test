@@ -131,7 +131,7 @@ struct User {
 
 async fn perform_signout(State(state): State<AppState>, jar: PrivateCookieJar) -> impl IntoResponse {
     (
-        jar.remove(Cookie::named("token")),
+        jar.remove(Cookie::from("token")),
         Redirect::to("/")
     )
 }
@@ -209,6 +209,7 @@ async fn other(session: Option<Session>) -> Markup {
 enum Section {
     Admin,
     Home,
+    About,
     Other,
 }
 
@@ -217,6 +218,7 @@ impl Section {
         match self {
             Self::Admin => "/admin",
             Self::Home => "/",
+            Self::About => "/about",
             Self::Other => "/other",
         }
     }
@@ -345,22 +347,63 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                         }
                     }
 
-                    div.flex.flex-row.items-center."space-x-4" {
-                        @if Auth::Guest == auth {
-                            (Ref("Sign in", "/signin", false))
-                            
-                            (Ref("Sign up", "/signup", false))
-                        } @else { 
-                            (Ref("Sign out", "/signout", false))
-                            
-                        }
-
+                    div
+                        .flex.flex-row.items-center."space-x-4"
+                        x-data = "{ open: false }"
+                    {
                         button x-on:click="isDark = toggleDarkMode()" {
-                            div."dark:hidden".block {
+                            div."dark:hidden".block."hover:opacity-80".transition-opacity {
                                 (PreEscaped(include_str!("../static/sun.svg")))
                             }
-                            div.hidden."dark:block" {
+                            div.hidden."dark:block"."hover:opacity-80".transition-opacity {
                                 (PreEscaped(include_str!("../static/moon.svg")))
+                            }
+                        }
+                        
+                        @match auth {
+                            Auth::Guest => {
+                                (Ref("Sign in", "/signin", false))
+                                (Ref("Sign up", "/signup", false))
+                            }
+                            Auth::User(s) | Auth::Admin(s) => {
+                                div 
+                                    .rounded-full.inline-block."p-2".select-none
+                                    ."bg-zinc-100/95"."dark:bg-zinc-800/95"
+                                    ."hover:opacity-80".transition-opacity
+                                    x-on:click="open = !open"
+                                {
+                                    p ."text-foreground/80".font-bold."hover:opacity-100" {
+                                        (s.first_name()[..1].to_uppercase())
+                                        (s.last_name()[..1].to_uppercase())
+                                    }
+                                }
+
+                                div 
+                                    .absolute
+                                    .shadow-md.rounded-xl.bg-background."z-50"
+                                    ."top-0"."right-0"
+                                    ."px-6"."py-4"
+                                    x-show="open"
+                                    x-transition
+                                {
+                                    div."flex flex-col space-y-2"."p-2".flex.flex-col {
+
+                                        div.flex.flex-row.justify-center."space-x-4" {
+                                            p.text-lg.font-bold {
+                                                (s.first_name()) " " (s.last_name())
+                                            }
+
+                                            button x-on:click="open = !open" {
+                                                (PreEscaped(include_str!("../static/close.svg")))
+                                            }
+                                        }
+                                        
+
+                                        hr."opacity-70";
+                                        
+                                        (Ref("Sign out", "/signout", false))
+                                    }
+                                }
                             }
                         }
                     }
