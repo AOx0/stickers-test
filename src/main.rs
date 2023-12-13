@@ -2,7 +2,7 @@ use auth::Session;
 use axum_extra::extract::{PrivateCookieJar, cookie::Cookie};
 use axum_server::tls_rustls::RustlsConfig;
 use maud::{html, Markup, DOCTYPE, PreEscaped};
-use axum::{Router, routing::get, response::{IntoResponse, Redirect, Response}, extract::{State, Request, Host}, Form, middleware::{self, Next}, http::{StatusCode, Uri}, BoxError};
+use axum::{Router, routing::get, response::{IntoResponse, Redirect}, extract::{State, Host}, Form, http::{StatusCode, Uri}, BoxError};
 use state::AppState;
 use strum::{EnumIter, IntoEnumIterator};
 use surrealdb::opt::auth::Scope;
@@ -13,6 +13,7 @@ pub mod pool;
 pub mod auth;
 pub mod state;
 pub mod error;
+pub mod middleware;
 
 #[derive(Clone, Copy)]
 struct Ports {
@@ -45,20 +46,22 @@ async fn main() {
     let auth : Router<AppState> = Router::new()
         .route("/signin", get(signin).post(perform_signin))
         .route("/signup", get(signin))
-        .route_layer(middleware::from_fn_with_state(state.clone(), middleware_redirect_already_logged_in));
+        .route_layer(middleware::from_fn_with_state(state.clone(), middleware::redirect_already_logged_in));
 
     let admin : Router<AppState> = Router::new()
         .route("/admin", get(admin))
-        .route_layer(middleware::from_fn_with_state(state.clone(), middleware_assert_is_admin));
+        .route_layer(middleware::from_fn_with_state(state.clone(), middleware::assert_is_admin));
 
     let app = Router::new()
         .route("/", get(root))
         .route("/other", get(other))
         .route("/signout", get(perform_signout))
+        .route("/about", get(about))
         .merge(admin)
         .merge(auth)
         .fallback_service(ServeDir::new("./static/"))
         .layer(tower_http::compression::CompressionLayer::new())
+        .route_layer(middleware::from_fn(middleware::insert_xframe_options_header))
         .with_state(state);
         
     axum_server::bind_rustls(format!("[::]:{}", ports.https).parse().unwrap(), config)
@@ -100,24 +103,6 @@ async fn redirect_http_to_https(ports: Ports) {
         .unwrap();
 }
 
-async fn middleware_redirect_already_logged_in(_: State<AppState>, session: Result<Session, error::Error>, req: Request, next: Next) -> Response {
-    if session.is_ok() {
-        return Redirect::to("/").into_response();
-    }
-    
-    next.run(req).await
-}
-
-async fn middleware_assert_is_admin(_: State<AppState>, session: Result<Session, error::Error>, req: Request, next: Next) -> Response {
-    if let Ok(session) = session {
-        if session.is_admin() {
-            return next.run(req).await;
-        }
-    }
-    
-    Redirect::to("/").into_response()
-}
-
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 struct UserInfo {
     username: String,
@@ -129,7 +114,7 @@ struct User {
     is_admin: Option<bool>,
 }
 
-async fn perform_signout(State(state): State<AppState>, jar: PrivateCookieJar) -> impl IntoResponse {
+async fn perform_signout(jar: PrivateCookieJar) -> impl IntoResponse {
     (
         jar.remove(Cookie::from("token")),
         Redirect::to("/")
@@ -201,6 +186,14 @@ async fn other(session: Option<Session>) -> Markup {
     Template(Section::Other, Auth::from(session.as_ref()), html!{
         h1."text-4xl".font-bold ."h-[1000px]" {
             "Other!"
+        }
+    })  
+}
+
+async fn about(session: Option<Session>) -> Markup {
+    Template(Section::Other, Auth::from(session.as_ref()), html!{
+        h1."text-4xl".font-bold ."h-[1000px]" {
+            "About!"
         }
     })  
 }
@@ -327,6 +320,7 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                     ."border-b"."border-zinc-100/95"."dark:border-zinc-800/95"
                     .backdrop-blur
                     ."supports-[backdrop-filter]:bg-background/60"
+                    ."h-[65px]"
                 {
                     div.flex.flex-row.items-center."space-x-9" {
                         h1 { "Aaa" }
@@ -359,7 +353,7 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                                 (PreEscaped(include_str!("../static/moon.svg")))
                             }
                         }
-                        
+
                         @match auth {
                             Auth::Guest => {
                                 (Ref("Sign in", "/signin", false))
@@ -372,7 +366,10 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                                     ."hover:opacity-80".transition-opacity
                                     x-on:click="open = !open"
                                 {
-                                    p ."text-foreground/80".font-bold."hover:opacity-100" {
+                                    p 
+                                        ."text-foreground/80".text-xs
+                                        .font-bold."hover:opacity-100"
+                                    {
                                         (s.first_name()[..1].to_uppercase())
                                         (s.last_name()[..1].to_uppercase())
                                     }
@@ -383,7 +380,9 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                                     .shadow-md.rounded-xl.bg-background."z-50"
                                     ."top-0"."right-0"
                                     ."px-6"."py-4"
+                                    .hidden
                                     x-show="open"
+                                    x-init="$el.classList.remove('hidden')"
                                     x-transition
                                 {
                                     div."flex flex-col space-y-2"."p-2".flex.flex-col {
