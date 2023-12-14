@@ -1,10 +1,11 @@
 use auth::Session;
 use axum_extra::extract::{PrivateCookieJar, cookie::Cookie};
 use axum_server::tls_rustls::RustlsConfig;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::{rt::TokioExecutor, client::legacy::{Client, connect::HttpConnector}};
 use maud::{html, Markup, DOCTYPE, PreEscaped};
-use axum::{Router, routing::{get, post}, response::{IntoResponse, Redirect}, extract::{State, Host}, Form, http::{StatusCode, Uri}, BoxError};
+use axum::{Router, routing::{get, post}, response::{IntoResponse, Redirect}, extract::{State, Host}, Form, http::{StatusCode, Uri}, BoxError, Extension, body::Body};
 use state::AppState;
+use tower_http::add_extension::AddExtensionLayer;
 use strum::{EnumIter, IntoEnumIterator};
 use surrealdb::opt::auth::Scope;
 use axum::handler::HandlerWithoutStateExt;
@@ -38,11 +39,15 @@ async fn main() {
     };
 
     let config = RustlsConfig::from_pem_file(
-        "/Users/alejandro/certificate.pem",
-        "/Users/alejandro/private-key.pem",
+        "/Users/alejandro/Downloads/OsornioLOL/certificate.crt",
+        "/Users/alejandro/Downloads/OsornioLOL/private.key",
     )
     .await
     .unwrap();
+
+    let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+    .http2_only(true)
+    .build_http::<Body>();
 
     tokio::spawn(redirect_http_to_https(ports));
 
@@ -66,6 +71,7 @@ async fn main() {
         .fallback_service(ServeDir::new("./static/"))
         .layer(tower_http::compression::CompressionLayer::new())
         .route_layer(middleware::from_fn(middleware::insert_securiy_headers))
+        .layer(AddExtensionLayer::new(client))
         .with_state(state);
         
     axum_server::bind_rustls(format!("[::]:{}", ports.https).parse().unwrap(), config)
@@ -74,7 +80,7 @@ async fn main() {
         .unwrap();
 }
 
-async fn proxy_upload_to_middleware(State(state): State<AppState>, req: axum::extract::Request) -> impl IntoResponse {
+async fn proxy_upload_to_middleware(State(state): State<AppState>, client: Extension<Client<HttpConnector, Body>>, req: axum::extract::Request) -> impl IntoResponse {
     use hyper_util::client::legacy::Client;
     
     let method = req.method().to_owned();
@@ -98,7 +104,7 @@ async fn proxy_upload_to_middleware(State(state): State<AppState>, req: axum::ex
 
     *req.headers_mut() = headers;
 
-    let client = Client::builder(TokioExecutor::new()).build_http();
+
     let res = client.request(req).await.unwrap();
 
     res.into_response()
