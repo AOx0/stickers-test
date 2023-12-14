@@ -7,6 +7,7 @@ use crate::pool::SurrealPool;
 #[derive(Debug, Clone)]
 pub struct State {
     pub surreal: SurrealPool,
+    pub img_server: String,
     key: Key
 }
 
@@ -14,8 +15,9 @@ pub struct State {
 pub struct AppState(Arc<State>);
 
 impl AppState {
-    pub fn new(surreal: SurrealPool) -> Self {
+    pub fn new<'a>(surreal: SurrealPool, img_server: &'a str) -> Self {
         Self(Arc::new(State {
+            img_server: img_server.to_string(),
             surreal,
             key: Key::generate()
         }))

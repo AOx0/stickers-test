@@ -27,8 +27,10 @@ async fn main() {
     dotenv::dotenv().ok();
     let surreal = std::env::var("SURREAL").expect("SURREAL must be set");
     let s_size = std::env::var("POOL_SIZE").expect("POOL_SIZE must be set");
+    let img_server = std::env::var("IMG_SERVER").expect("IMG_SERVER must be set");
 
-    let state = state::AppState::new(pool::SPool::new(surreal.as_str(), s_size.parse::<usize>().unwrap()));
+    let surreal = pool::SPool::new(surreal.as_str(), s_size.parse::<usize>().unwrap());
+    let state = state::AppState::new(surreal, &img_server);
 
     let ports = Ports {
         http: 80,
@@ -72,16 +74,15 @@ async fn main() {
         .unwrap();
 }
 
-async fn proxy_upload_to_middleware(req: axum::extract::Request) -> impl IntoResponse {
+async fn proxy_upload_to_middleware(State(state): State<AppState>, req: axum::extract::Request) -> impl IntoResponse {
     use hyper_util::client::legacy::Client;
-
-    println!("Proxying request: {:?}", req);
-
+    
     let method = req.method().to_owned();
+    let (scheme, authority) = state.img_server.split_once("://").unwrap();
 
     let uri = Uri::builder()
-        .scheme("http")
-        .authority("localhost:1234")
+        .scheme(scheme)
+        .authority(authority)
         .path_and_query("/new")
         .build()
         .unwrap();
@@ -97,12 +98,8 @@ async fn proxy_upload_to_middleware(req: axum::extract::Request) -> impl IntoRes
 
     *req.headers_mut() = headers;
 
-    println!("Request: {:?}", req);
-
     let client = Client::builder(TokioExecutor::new()).build_http();
     let res = client.request(req).await.unwrap();
-
-    println!("Response: {:?}", res);
 
     res.into_response()
 }
