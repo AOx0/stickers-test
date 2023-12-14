@@ -1,8 +1,9 @@
 use auth::Session;
 use axum_extra::extract::{PrivateCookieJar, cookie::Cookie};
 use axum_server::tls_rustls::RustlsConfig;
+use hyper_util::rt::TokioExecutor;
 use maud::{html, Markup, DOCTYPE, PreEscaped};
-use axum::{Router, routing::get, response::{IntoResponse, Redirect}, extract::{State, Host}, Form, http::{StatusCode, Uri}, BoxError};
+use axum::{Router, routing::{get, post}, response::{IntoResponse, Redirect}, extract::{State, Host}, Form, http::{StatusCode, Uri}, BoxError};
 use state::AppState;
 use strum::{EnumIter, IntoEnumIterator};
 use surrealdb::opt::auth::Scope;
@@ -57,17 +58,53 @@ async fn main() {
         .route("/other", get(other))
         .route("/signout", get(perform_signout))
         .route("/about", get(about))
+        .route("/upload", post(proxy_upload_to_middleware))
         .merge(admin)
         .merge(auth)
         .fallback_service(ServeDir::new("./static/"))
         .layer(tower_http::compression::CompressionLayer::new())
-        .route_layer(middleware::from_fn(middleware::insert_xframe_options_header))
+        .route_layer(middleware::from_fn(middleware::insert_securiy_headers))
         .with_state(state);
         
     axum_server::bind_rustls(format!("[::]:{}", ports.https).parse().unwrap(), config)
         .serve(app.into_make_service())
         .await
         .unwrap();
+}
+
+async fn proxy_upload_to_middleware(req: axum::extract::Request) -> impl IntoResponse {
+    use hyper_util::client::legacy::Client;
+
+    println!("Proxying request: {:?}", req);
+
+    let method = req.method().to_owned();
+
+    let uri = Uri::builder()
+        .scheme("http")
+        .authority("localhost:1234")
+        .path_and_query("/new")
+        .build()
+        .unwrap();
+
+    let headers = req.headers().to_owned();
+    let body = req.into_body();
+
+    let mut req = hyper::Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(body)
+        .unwrap();
+
+    *req.headers_mut() = headers;
+
+    println!("Request: {:?}", req);
+
+    let client = Client::builder(TokioExecutor::new()).build_http();
+    let res = client.request(req).await.unwrap();
+
+    println!("Response: {:?}", res);
+
+    res.into_response()
 }
 
 #[allow(dead_code)]

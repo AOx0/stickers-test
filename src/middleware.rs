@@ -21,8 +21,12 @@ pub async fn assert_is_admin(_: State<AppState>, session: Result<Session, error:
     Redirect::to("/").into_response()
 }
 
-pub async fn insert_xframe_options_header(req: Request, next: Next) -> Response {
+pub async fn insert_securiy_headers(req: Request, next: Next) -> Response {
     let mut res = next.run(req).await;
     res.headers_mut().insert("X-Frame-Options", "DENY".parse().unwrap());
+    res.headers_mut().insert("X-XSS-Protection", "1; mode=block".parse().unwrap());
+    res.headers_mut().insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+    res.headers_mut().insert("Referrer-Policy", "no-referrer".parse().unwrap());
+    res.headers_mut().insert("Strict-Transport-Security", "max-age=63072000; includeSubDomains".parse().unwrap());
     res
 }
