@@ -311,7 +311,7 @@ async fn signup(b: Template) -> Markup {
                     
                 }
             }
-            }
+        }
     })  
 }
 
@@ -334,7 +334,7 @@ async fn signin(b: Template) -> Markup {
                     
                 }
             }
-            }
+        }
     })  
 }
 

@@ -19,6 +19,7 @@ enum Auth {
 }
 
 pub struct Template {
+    title: String,
     mode: ContentMode,
     auth: Auth,
 }
@@ -40,13 +41,20 @@ impl Template {
         }
     }
 
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = title.into();
+    }
+
     pub fn render(self, content: Markup) -> Markup {
         match self.mode {
             ContentMode::Full => {
-                Template(self.auth, ContentMode::Full, content)
+                Template(&self.title, self.auth, ContentMode::Full, content)
             }
             ContentMode::Embedded => {
                 html! {
+                    head {
+                        title { (self.title) }
+                    }
                     (content)
                 }
                 
@@ -76,11 +84,13 @@ impl FromRequestParts<AppState> for Template {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         if parts.headers.get("HX-Request").is_some() {
             Ok(Template {
+                title: format!("AOx0 - {}", parts.uri.path()),
                 mode: ContentMode::Embedded,
                 auth: Auth::Guest,
             })
         } else {
             Ok(Template {
+                title: format!("AOx0 - {}", parts.uri.path()),
                 mode: ContentMode::Full,
                 auth: Auth::from(parts.extract_with_state::<Option<Session>, AppState>(state).await.map_err(|e| {
                     println!("Auth error: {:?}", e);
@@ -137,7 +147,7 @@ fn Ref(title: impl maud::Render, href: &str, active: bool) -> Markup {
 }
 
 #[allow(non_snake_case)]
-fn Template(auth: Auth, mode: ContentMode, content: Markup) -> Markup {
+fn Template(title: &str, auth: Auth, mode: ContentMode, content: Markup) -> Markup {
     if let ContentMode::Embedded = mode {
         return html! {
             (content)
@@ -148,7 +158,7 @@ fn Template(auth: Auth, mode: ContentMode, content: Markup) -> Markup {
         (DOCTYPE)
         html lang="es" {
             head {
-                title { "Hello, world!" }
+                title { (title) }
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 link href="/style.css" rel="stylesheet";
