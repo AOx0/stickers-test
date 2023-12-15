@@ -68,7 +68,7 @@ async fn main() {
         .route("/upload", post(proxy_upload_to_middleware))
         .route("/get/:id", get(proxy_get_to_middleware))
         .merge(admin)
-        .merge(auth)
+        .nest("/auth", auth)
         .fallback_service(ServeDir::new("./static/"))
         .layer(tower_http::compression::CompressionLayer::new())
         .route_layer(middleware::from_fn(middleware::insert_securiy_headers))
@@ -241,7 +241,7 @@ async fn signin(session: Option<Session>) -> Markup {
                     input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="username" type="text" placeholder="Username" {}
                     input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="password" type="password" placeholder="Password" {}
                     button."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".w-full 
-                    hx-post="/signin" "hx-target-401"="#err"
+                    hx-post="/auth/signin" "hx-target-401"="#err"
                     {
                         "Sign in"
                     }
@@ -447,8 +447,8 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
 
                         @match auth {
                             Auth::Guest => {
-                                (Ref("Sign in", "/signin", false))
-                                (Ref("Sign up", "/signup", false))
+                                (Ref("Sign in", "/auth/signin", false))
+                                (Ref("Sign up", "/auth/signup", false))
                             }
                             Auth::User(s) | Auth::Admin(s) => {
                                 div 
