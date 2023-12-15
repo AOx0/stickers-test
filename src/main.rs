@@ -73,6 +73,7 @@ async fn main() {
         .layer(tower_http::compression::CompressionLayer::new())
         .route_layer(middleware::from_fn(middleware::insert_securiy_headers))
         .layer(AddExtensionLayer::new(client))
+        .layer(middleware::from_fn(middleware::comes_from_htmx))
         .with_state(state);
         
     axum_server::bind_rustls(format!("[::]:{}", ports.https).parse().unwrap(), config)
@@ -190,10 +191,16 @@ struct User {
 }
 
 async fn perform_signout(jar: PrivateCookieJar) -> impl IntoResponse {
-    (
+    let res = (
         jar.remove(Cookie::from("token")),
-        Redirect::to("/")
-    )
+        StatusCode::OK,
+    ).into_response();
+
+    let (mut parts, body) = res.into_parts();
+
+    parts.headers.append("HX-Redirect", "/".parse().unwrap());
+
+    axum::response::Response::from_parts(parts, body)
 }
 
 async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Form(info): Form<SignInInfo>) -> impl IntoResponse {
@@ -278,8 +285,8 @@ async fn perform_signup(State(state): State<AppState>, jar: PrivateCookieJar, Fo
     }
 }
 
-async fn signup() -> Markup {
-    Template(Section::Home, Auth::Guest, html!{
+async fn signup(Extension(mode): Extension<ContentMode>) -> Markup {
+    Template(Section::Home, Auth::Guest, mode, html!{
         div.flex.flex-col.justify-center.h-screen {
             div."flex flex-col items-center" hx-ext="response-targets" {
                 form."flex flex-col items-center space-y-4 border border-zinc-100/95 dark:border-zinc-800/95 p-4 rounded-md" {
@@ -307,8 +314,8 @@ async fn signup() -> Markup {
     })  
 }
 
-async fn signin() -> Markup {
-    Template(Section::Home, Auth::Guest, html!{
+async fn signin(Extension(mode): Extension<ContentMode>) -> Markup {
+    Template(Section::Home, Auth::Guest, mode, html!{
         div.flex.flex-col.justify-center.h-screen {
             div."flex flex-col items-center" hx-ext="response-targets" {
                 form."flex flex-col items-center space-y-4 border border-zinc-100/95 dark:border-zinc-800/95 p-4 rounded-md" {
@@ -330,33 +337,33 @@ async fn signin() -> Markup {
     })  
 }
 
-async fn admin(session: Session) -> Markup {
+async fn admin(session: Session, Extension(mode): Extension<ContentMode>) -> Markup {
 
-    Template(Section::Admin, Auth::Admin(&session), html!{
+    Template(Section::Admin, Auth::Admin(&session), mode, html!{
         div."p-4".flex.flex-col {
             h1."text-4xl".font-bold { "Hola, " (session.first_name()) "!" }
         }
     })  
 }
 
-async fn root(session: Option<Session>) -> Markup {
-    Template(Section::Home, Auth::from(session.as_ref()), html!{
+async fn root(session: Option<Session>, Extension(mode): Extension<ContentMode>) -> Markup {
+    Template(Section::Home, Auth::from(session.as_ref()), mode, html!{
         h1."text-4xl".font-bold ."h-[1000px]" {
             "Hello, world!"
         }
     })  
 }
 
-async fn other(session: Option<Session>) -> Markup {
-    Template(Section::Other, Auth::from(session.as_ref()), html!{
+async fn other(session: Option<Session>, Extension(mode): Extension<ContentMode>) -> Markup {
+    Template(Section::Other, Auth::from(session.as_ref()), mode, html!{
         h1."text-4xl".font-bold ."h-[1000px]" {
             "Other!"
         }
     })  
 }
 
-async fn about(session: Option<Session>) -> Markup {
-    Template(Section::Other, Auth::from(session.as_ref()), html!{
+async fn about(session: Option<Session>, Extension(mode): Extension<ContentMode>) -> Markup {
+    Template(Section::Other, Auth::from(session.as_ref()), mode, html!{
         h1."text-4xl".font-bold ."h-[1000px]" {
             "About!"
         }
@@ -419,19 +426,29 @@ fn Ref(title: impl maud::Render, href: &str, active: bool) -> Markup {
             .text-sm.font-medium."space-x-4"
             .text-foreground.transition-colors 
         {
-            @if active {
-                a."text-foreground/80" 
-                href={ (href) } { (title) }
-            } @else {
-                a."hover:text-foreground/80"."text-foreground/60" 
-                href={ (href) } { (title) }
-            }
+            p."hover:text-foreground/80"."text-foreground/60" 
+            hx-boost="true"
+            hx-push-url="true"
+            hx-target="#main"
+            hx-get={ (href) } { (title) } 
         }
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ContentMode {
+    Full,
+    Embedded,
+}
+
 #[allow(non_snake_case)]
-fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
+fn Template(section: Section, auth: Auth, mode: ContentMode, content: Markup) -> Markup {
+    if let ContentMode::Embedded = mode {
+        return html! {
+            (content)
+        }
+    }
+
     html! {
         (DOCTYPE)
         html lang="es" {
@@ -577,7 +594,7 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                     }
                 }
 
-                main { (content) }
+                main #main { (content) }
 
                 (Footer())
             }
