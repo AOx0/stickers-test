@@ -734,8 +734,9 @@ video {
   background-color: hsl(var(--background));
 }
 
-.bg-red-100\/80 {
-  background-color: rgb(254 226 226 / 0.8);
+.bg-red-100 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(254 226 226 / var(--tw-bg-opacity));
 }
 
 .bg-zinc-100\/95 {

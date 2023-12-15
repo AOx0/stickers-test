@@ -53,7 +53,7 @@ async fn main() {
 
     let auth : Router<AppState> = Router::new()
         .route("/signin", get(signin).post(perform_signin))
-        .route("/signup", get(signin))
+        .route("/signup", get(signup).post(perform_signup))
         .route_layer(middleware::from_fn_with_state(state.clone(), middleware::redirect_already_logged_in));
 
     let admin : Router<AppState> = Router::new()
@@ -170,9 +170,18 @@ async fn redirect_http_to_https(ports: Ports) {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-struct UserInfo {
+struct SignInInfo {
     username: String,
     password: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct SignUpInfo {
+    username: String,
+    password: String,
+    first_name: String,
+    last_name: String,
+    email: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -187,7 +196,7 @@ async fn perform_signout(jar: PrivateCookieJar) -> impl IntoResponse {
     )
 }
 
-async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Form(info): Form<UserInfo>) -> impl IntoResponse {
+async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Form(info): Form<SignInInfo>) -> impl IntoResponse {
     let db = state.surreal.get().await.unwrap();
     
     let sign_res = db.signin(Scope {
@@ -220,7 +229,7 @@ async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Fo
         Err(e) => {
             println!("Auth error: {:?}", e);
             (StatusCode::UNAUTHORIZED, html! {
-                div ."bg-red-100/80 border border-red-400 text-red-700 px-4 py-2 rounded relative" role="alert" {
+                div ."bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded relative" role="alert" {
                     "Invalid credentials."
                 }
             }).into_response()
@@ -228,9 +237,78 @@ async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Fo
     }
 }
 
-async fn signin(session: Option<Session>) -> Markup {
-    println!("Session: {:?}", session);
-    Template(Section::Home, Auth::from(session.as_ref()), html!{
+async fn perform_signup(State(state): State<AppState>, jar: PrivateCookieJar, Form(info): Form<SignUpInfo>) -> impl IntoResponse {
+    let db = state.surreal.get().await.unwrap();
+    
+    let sign_res = db.signup(Scope {
+        namespace: "demo",
+        database: "demo",
+        scope: "account",
+        params: info
+    }).await;
+
+    match sign_res {
+        Ok(token) => {
+            let res = (
+                jar.add(
+                    Cookie::build(("token", token.as_insecure_token().to_string()))
+                    .secure(true)
+                    .http_only(true)
+                    .path("/")
+                    .same_site(axum_extra::extract::cookie::SameSite::Strict)
+                    .build()
+                ),
+                StatusCode::OK,
+            ).into_response();
+
+            let (mut parts, body) = res.into_parts();
+
+            parts.headers.append("HX-Redirect", "/".parse().unwrap());
+            
+            axum::response::Response::from_parts(parts, body)
+        },
+        Err(e) => {
+            println!("Auth error: {:?}", e);
+            (StatusCode::UNAUTHORIZED, html! {
+                div ."bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded relative" role="alert" {
+                    "Invalid credentials."
+                }
+            }).into_response()
+        }
+    }
+}
+
+async fn signup() -> Markup {
+    Template(Section::Home, Auth::Guest, html!{
+        div.flex.flex-col.justify-center.h-screen {
+            div."flex flex-col items-center" hx-ext="response-targets" {
+                form."flex flex-col items-center space-y-4 border border-zinc-100/95 dark:border-zinc-800/95 p-4 rounded-md" {
+                    h1."text-4xl".font-bold {
+                        "Sign up"
+                    }
+                    div #err {}
+                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="username" type="text" placeholder="Username" {}
+                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="password" type="password" placeholder="Password" {}
+                    
+                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="first_name" type="text" placeholder="First name" {}
+                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="last_name" type="text" placeholder="Last name" {}
+
+                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="email" type="email" placeholder="Email" {}
+
+                    button."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".w-full 
+                    hx-post="/auth/signup" "hx-target-401"="#err"
+                    {
+                        "Sign up"
+                    }
+                    
+                }
+            }
+            }
+    })  
+}
+
+async fn signin() -> Markup {
+    Template(Section::Home, Auth::Guest, html!{
         div.flex.flex-col.justify-center.h-screen {
             div."flex flex-col items-center" hx-ext="response-targets" {
                 form."flex flex-col items-center space-y-4 border border-zinc-100/95 dark:border-zinc-800/95 p-4 rounded-md" {
