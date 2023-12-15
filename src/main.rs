@@ -3,7 +3,7 @@ use axum_extra::extract::{PrivateCookieJar, cookie::Cookie};
 use axum_server::tls_rustls::RustlsConfig;
 use hyper_util::{rt::TokioExecutor, client::legacy::{Client, connect::HttpConnector}};
 use maud::{html, Markup, DOCTYPE, PreEscaped};
-use axum::{Router, routing::{get, post}, response::{IntoResponse, Redirect}, extract::{State, Host}, Form, http::{StatusCode, Uri}, BoxError, Extension, body::Body};
+use axum::{Router, routing::{get, post}, response::{IntoResponse, Redirect}, extract::{State, Host, Path}, Form, http::{StatusCode, Uri}, BoxError, Extension, body::Body};
 use state::AppState;
 use tower_http::add_extension::AddExtensionLayer;
 use strum::{EnumIter, IntoEnumIterator};
@@ -66,6 +66,7 @@ async fn main() {
         .route("/signout", get(perform_signout))
         .route("/about", get(about))
         .route("/upload", post(proxy_upload_to_middleware))
+        .route("/get/:id", get(proxy_get_to_middleware))
         .merge(admin)
         .merge(auth)
         .fallback_service(ServeDir::new("./static/"))
@@ -80,9 +81,34 @@ async fn main() {
         .unwrap();
 }
 
+async fn proxy_get_to_middleware(State(state): State<AppState>, Path((id,)): Path<(String,)>, client: Extension<Client<HttpConnector, Body>>, req: axum::extract::Request) -> impl IntoResponse {    
+    let method = req.method().to_owned();
+    let (scheme, authority) = state.img_server.split_once("://").unwrap();
+
+    let uri = Uri::builder()
+        .scheme(scheme)
+        .authority(authority)
+        .path_and_query(format!("/{}", id))
+        .build()
+        .unwrap();
+
+    let headers = req.headers().to_owned();
+    let body = req.into_body();
+
+    let mut req = hyper::Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(body)
+        .unwrap();
+
+    *req.headers_mut() = headers;
+
+    let res = client.request(req).await.unwrap();
+
+    res.into_response()
+}
+
 async fn proxy_upload_to_middleware(State(state): State<AppState>, client: Extension<Client<HttpConnector, Body>>, req: axum::extract::Request) -> impl IntoResponse {
-    use hyper_util::client::legacy::Client;
-    
     let method = req.method().to_owned();
     let (scheme, authority) = state.img_server.split_once("://").unwrap();
 
@@ -173,14 +199,31 @@ async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Fo
 
     match sign_res {
         Ok(token) => {
-            (
-                jar.add(Cookie::new("token", token.as_insecure_token().to_string())),
-                Redirect::to("/"),
-            ).into_response()
+            let res = (
+                jar.add(
+                    Cookie::build(("token", token.as_insecure_token().to_string()))
+                    .secure(true)
+                    .http_only(true)
+                    .path("/")
+                    .same_site(axum_extra::extract::cookie::SameSite::Strict)
+                    .build()
+                ),
+                StatusCode::OK,
+            ).into_response();
+
+            let (mut parts, body) = res.into_parts();
+
+            parts.headers.append("HX-Redirect", "/".parse().unwrap());
+            
+            axum::response::Response::from_parts(parts, body)
         },
         Err(e) => {
             println!("Auth error: {:?}", e);
-            (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+            (StatusCode::UNAUTHORIZED, html! {
+                div ."bg-red-100/80 border border-red-400 text-red-700 px-4 py-2 rounded relative" role="alert" {
+                    "Invalid credentials."
+                }
+            }).into_response()
         }
     }
 }
@@ -188,20 +231,24 @@ async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Fo
 async fn signin(session: Option<Session>) -> Markup {
     println!("Session: {:?}", session);
     Template(Section::Home, Auth::from(session.as_ref()), html!{
-        div.flex.flex-col.justify-center {
-            div."flex flex-col items-center space-y-4" {
-                h1."text-4xl".font-bold {
-                    "Sign in"
-                }
-                form."flex flex-col space-y-4" method="POST" action="/signin" {
-                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2" name="username" type="text" placeholder="Username" {}
-                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2" name="password" type="password" placeholder="Password" {}
-                    button."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2" type="submit" {
+        div.flex.flex-col.justify-center.h-screen {
+            div."flex flex-col items-center" hx-ext="response-targets" {
+                form."flex flex-col items-center space-y-4 border border-zinc-100/95 dark:border-zinc-800/95 p-4 rounded-md" {
+                    h1."text-4xl".font-bold {
                         "Sign in"
                     }
+                    div #err {}
+                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="username" type="text" placeholder="Username" {}
+                    input."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".text-black name="password" type="password" placeholder="Password" {}
+                    button."rounded-md border border-zinc-100/95 dark:border-zinc-800/95 p-2".w-full 
+                    hx-post="/signin" "hx-target-401"="#err"
+                    {
+                        "Sign in"
+                    }
+                    
                 }
             }
-        }
+            }
     })  
 }
 
@@ -316,6 +363,8 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 link href="/style.css" rel="stylesheet";
                 script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" {}
+                script src="https://unpkg.com/htmx.org@1.9.9" {}
+                script src="https://unpkg.com/htmx.org/dist/ext/response-targets.js" {}
                 script {
                     "
                         function toggleDarkMode() {
@@ -363,7 +412,9 @@ fn Template(section: Section, auth: Auth, content: Markup) -> Markup {
                     ."h-[65px]"
                 {
                     div.flex.flex-row.items-center."space-x-9" {
-                        h1 { "Aaa" }
+                        
+                        h1.font-semibold { "AOx0" }
+                        
                         div
                             .flex.flex-row.items-center
                             .text-sm.font-medium."space-x-4"
