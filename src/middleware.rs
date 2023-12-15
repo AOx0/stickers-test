@@ -30,13 +30,3 @@ pub async fn insert_securiy_headers(req: Request, next: Next) -> Response {
     res.headers_mut().insert("Strict-Transport-Security", "max-age=63072000; includeSubDomains".parse().unwrap());
     res
 }
-
-pub async fn comes_from_htmx(mut req: Request, next: Next) -> Response {
-    if req.headers().get("HX-Request").is_some() {
-        req.extensions_mut().insert(crate::ContentMode::Embedded);
-    } else {
-        req.extensions_mut().insert(crate::ContentMode::Full);
-    };
-
-    next.run(req).await
-}
