@@ -3,7 +3,7 @@ use http::request::Parts;
 use maud::{Markup, html, DOCTYPE, PreEscaped};
 use strum::{EnumIter, IntoEnumIterator};
 
-use crate::{auth::Session, state::AppState, error::Error};
+use crate::{auth::Session, state::Context, error::Error};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ContentMode {
@@ -12,7 +12,7 @@ pub enum ContentMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Auth {
+pub enum Auth {
     User(Session),
     Admin(Session),
     Guest,
@@ -26,25 +26,26 @@ pub struct Template {
 
 
 impl Template {
+    #[must_use]
     pub fn mode(&self) -> ContentMode {
         self.mode
     }
 
+    #[must_use]
     pub fn auth(&self) -> &Auth {
         &self.auth
     }
 
+    #[must_use]
     pub fn is_admin(&self) -> bool {
-        match self.auth {
-            Auth::Admin(_) => true,
-            _ => false,
-        }
+        matches!(self.auth, Auth::Admin(_))
     }
 
     pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = title.into();
     }
 
+    #[must_use]
     pub fn render(self, content: Markup) -> Markup {
         match self.mode {
             ContentMode::Full => {
@@ -78,10 +79,10 @@ impl From<Option<Session>> for Auth {
 }
 
 #[async_trait]
-impl FromRequestParts<AppState> for Template {
+impl FromRequestParts<Context> for Template {
     type Rejection = Error;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &Context) -> Result<Self, Self::Rejection> {
         if parts.headers.get("HX-Request").is_some() {
             Ok(Template {
                 title: format!("AOx0 - {}", parts.uri.path()),
@@ -92,8 +93,8 @@ impl FromRequestParts<AppState> for Template {
             Ok(Template {
                 title: format!("AOx0 - {}", parts.uri.path()),
                 mode: ContentMode::Full,
-                auth: Auth::from(parts.extract_with_state::<Option<Session>, AppState>(state).await.map_err(|e| {
-                    println!("Auth error: {:?}", e);
+                auth: Auth::from(parts.extract_with_state::<Option<Session>, Context>(state).await.map_err(|e| {
+                    println!("Auth error: {e:?}");
                     Error::AuthFailed
                 })?),
             })
@@ -110,7 +111,7 @@ enum Section {
 }
 
 impl Section {
-    fn map_path(&self) -> &'static str {
+    fn map_path(self) -> &'static str {
         match self {
             Self::Admin => "/admin",
             Self::Home => "/",
@@ -131,7 +132,7 @@ impl maud::Render for Section {
 
 
 #[allow(non_snake_case)]
-fn Ref(title: impl maud::Render, href: &str, active: bool) -> Markup {
+fn Ref(title: impl maud::Render, href: &str) -> Markup {
     html! {
         span 
             .text-sm.font-medium."space-x-4"
@@ -146,6 +147,8 @@ fn Ref(title: impl maud::Render, href: &str, active: bool) -> Markup {
     }
 }
 
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::needless_pass_by_value)]
 #[allow(non_snake_case)]
 fn Template(title: &str, auth: Auth, mode: ContentMode, content: Markup) -> Markup {
     if let ContentMode::Embedded = mode {
@@ -224,14 +227,14 @@ fn Template(title: &str, auth: Auth, mode: ContentMode, content: Markup) -> Mark
                             .text-sm.font-medium."space-x-4"
                             .text-foreground.transition-colors 
                         {
-                            @if let Auth::Admin(_) = auth {
-                                (Ref(Section::Admin, Section::Admin.map_path(), false))
-                            } 
-
                             @for s in Section::iter() {
                                 @if Section::Admin != s {
-                                    (Ref(s, s.map_path(), false))
+                                    (Ref(s, s.map_path()))
                                 }
+                            }
+
+                            @if let Auth::Admin(_) = auth {
+                                (Ref(Section::Admin, Section::Admin.map_path()))
                             }
                         }
                     }
@@ -251,8 +254,8 @@ fn Template(title: &str, auth: Auth, mode: ContentMode, content: Markup) -> Mark
 
                         @match auth {
                             Auth::Guest => {
-                                (Ref("Sign in", "/auth/signin", false))
-                                (Ref("Sign up", "/auth/signup", false))
+                                (Ref("Sign in", "/auth/signin"))
+                                (Ref("Sign up", "/auth/signup"))
                             }
                             Auth::User(s) | Auth::Admin(s) => {
                                 div 
@@ -295,7 +298,7 @@ fn Template(title: &str, auth: Auth, mode: ContentMode, content: Markup) -> Mark
 
                                         hr."opacity-70";
                                         
-                                        (Ref("Sign out", "/signout", false))
+                                        (Ref("Sign out", "/signout"))
                                     }
                                 }
                             }

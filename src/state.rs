@@ -2,20 +2,21 @@ use core::ops::Deref;
 use axum::extract::FromRef;
 use axum_extra::extract::cookie::Key;
 use std::sync::Arc;
-use crate::pool::SurrealPool;
+use crate::pool::SurrealManager;
 
 #[derive(Debug, Clone)]
 pub struct State {
-    pub surreal: SurrealPool,
+    pub surreal: SurrealManager,
     pub img_server: String,
     key: Key
 }
 
 #[derive(Clone)]
-pub struct AppState(Arc<State>);
+pub struct Context(Arc<State>);
 
-impl AppState {
-    pub fn new<'a>(surreal: SurrealPool, img_server: &'a str) -> Self {
+impl Context {
+    #[must_use]
+    pub fn new(surreal: SurrealManager, img_server: &str) -> Self {
         Self(Arc::new(State {
             img_server: img_server.to_string(),
             surreal,
@@ -25,7 +26,7 @@ impl AppState {
 }
 
 // deref so you can still access the inner fields easily
-impl Deref for AppState {
+impl Deref for Context {
     type Target = State;
 
     fn deref(&self) -> &Self::Target {
@@ -35,8 +36,8 @@ impl Deref for AppState {
 
 
 
-impl FromRef<AppState> for Key {
-    fn from_ref(state: &AppState) -> Self {
+impl FromRef<Context> for Key {
+    fn from_ref(state: &Context) -> Self {
         state.0.key.clone()
     }
 }

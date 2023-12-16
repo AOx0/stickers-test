@@ -1,13 +1,17 @@
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::all)]
+#![warn(clippy::pedantic)]
+#![deny(rust_2018_idioms, unsafe_code)]
+
 use auth::Session;
 use axum_extra::extract::{PrivateCookieJar, cookie::Cookie};
 use axum_server::tls_rustls::RustlsConfig;
 use hyper_util::{rt::TokioExecutor, client::legacy::{Client, connect::HttpConnector}};
-use maud::{html, Markup, DOCTYPE, PreEscaped};
+use maud::{html, Markup};
 use axum::{Router, routing::{get, post}, response::{IntoResponse, Redirect}, extract::{State, Host, Path}, Form, http::{StatusCode, Uri}, BoxError, Extension, body::Body};
-use state::AppState;
+use state::Context;
 use template::Template;
 use tower_http::add_extension::AddExtensionLayer;
-use strum::{EnumIter, IntoEnumIterator};
 use surrealdb::opt::auth::Scope;
 use axum::handler::HandlerWithoutStateExt;
 use tower_http::services::ServeDir;
@@ -32,8 +36,8 @@ async fn main() {
     let s_size = std::env::var("POOL_SIZE").expect("POOL_SIZE must be set");
     let img_server = std::env::var("IMG_SERVER").expect("IMG_SERVER must be set");
 
-    let surreal = pool::SPool::new(surreal.as_str(), s_size.parse::<usize>().unwrap());
-    let state = state::AppState::new(surreal, &img_server);
+    let surreal = pool::Manager::new(surreal.as_str(), s_size.parse::<usize>().expect("Valid pool size"));
+    let state = state::Context::new(surreal, &img_server);
 
     let ports = Ports {
         http: 80,
@@ -45,7 +49,7 @@ async fn main() {
         "/Users/alejandro/Downloads/OsornioLOL/private.key",
     )
     .await
-    .unwrap();
+    .expect("Valid certificate and key");
 
     let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
     .http2_only(true)
@@ -53,12 +57,12 @@ async fn main() {
 
     tokio::spawn(redirect_http_to_https(ports));
 
-    let auth : Router<AppState> = Router::new()
+    let auth : Router<Context> = Router::new()
         .route("/signin", get(signin).post(perform_signin))
         .route("/signup", get(signup).post(perform_signup))
         .route_layer(middleware::from_fn_with_state(state.clone(), middleware::redirect_already_logged_in));
 
-    let admin : Router<AppState> = Router::new()
+    let admin : Router<Context> = Router::new()
         .route("/admin", get(admin))
         .route_layer(middleware::from_fn_with_state(state.clone(), middleware::assert_is_admin));
 
@@ -77,22 +81,21 @@ async fn main() {
         .layer(AddExtensionLayer::new(client))
         .with_state(state);
         
-    axum_server::bind_rustls(format!("[::]:{}", ports.https).parse().unwrap(), config)
+    axum_server::bind_rustls(format!("[::]:{}", ports.https).parse().expect("Invalid binding"), config)
         .serve(app.into_make_service())
         .await
-        .unwrap();
+        .expect("Server failed");
 }
 
-async fn proxy_get_to_middleware(State(state): State<AppState>, Path((id,)): Path<(String,)>, client: Extension<Client<HttpConnector, Body>>, req: axum::extract::Request) -> impl IntoResponse {    
+async fn proxy_get_to_middleware(State(state): State<Context>, Path((id,)): Path<(String,)>, client: Extension<Client<HttpConnector, Body>>, req: axum::extract::Request) -> Result<impl IntoResponse, crate::error::Error> {    
     let method = req.method().to_owned();
-    let (scheme, authority) = state.img_server.split_once("://").unwrap();
+    let (scheme, authority) = state.img_server.split_once("://").expect("Invalid img server address; format must be scheme://authority");
 
     let uri = Uri::builder()
         .scheme(scheme)
         .authority(authority)
-        .path_and_query(format!("/{}", id))
-        .build()
-        .unwrap();
+        .path_and_query(format!("/{id}"))
+        .build().map_err(crate::error::Error::from)?;
 
     let headers = req.headers().to_owned();
     let body = req.into_body();
@@ -101,25 +104,23 @@ async fn proxy_get_to_middleware(State(state): State<AppState>, Path((id,)): Pat
         .method(method)
         .uri(uri)
         .body(body)
-        .unwrap();
+        .map_err(crate::error::Error::from)?;
 
     *req.headers_mut() = headers;
 
-    let res = client.request(req).await.unwrap();
-
-    res.into_response()
+    Ok(client.request(req).await.map_err(crate::error::Error::from)?.into_response())
 }
 
-async fn proxy_upload_to_middleware(State(state): State<AppState>, client: Extension<Client<HttpConnector, Body>>, req: axum::extract::Request) -> impl IntoResponse {
+async fn proxy_upload_to_middleware(State(state): State<Context>, client: Extension<Client<HttpConnector, Body>>, req: axum::extract::Request) -> Result<impl IntoResponse, crate::error::Error> {
     let method = req.method().to_owned();
-    let (scheme, authority) = state.img_server.split_once("://").unwrap();
+    let (scheme, authority) = state.img_server.split_once("://").expect("Invalid img server address; format must be scheme://authority");
 
     let uri = Uri::builder()
         .scheme(scheme)
         .authority(authority)
         .path_and_query("/new")
         .build()
-        .unwrap();
+        .map_err(crate::error::Error::from)?;
 
     let headers = req.headers().to_owned();
     let body = req.into_body();
@@ -128,47 +129,44 @@ async fn proxy_upload_to_middleware(State(state): State<AppState>, client: Exten
         .method(method)
         .uri(uri)
         .body(body)
-        .unwrap();
+        .map_err(crate::error::Error::from)?;
 
     *req.headers_mut() = headers;
 
-
-    let res = client.request(req).await.unwrap();
-
-    res.into_response()
+    Ok(client.request(req).await.map_err(crate::error::Error::from)?.into_response())
 }
 
 #[allow(dead_code)]
 async fn redirect_http_to_https(ports: Ports) {
-    fn make_https(host: String, uri: Uri, ports: Ports) -> Result<Uri, BoxError> {
-        let mut parts = uri.into_parts();
+    fn make_https(host: &str, uri: Uri, ports: Ports) -> Result<Uri, BoxError> {
+        let mut uri_parts = uri.into_parts();
 
-        parts.scheme = Some(axum::http::uri::Scheme::HTTPS);
+        uri_parts.scheme = Some(axum::http::uri::Scheme::HTTPS);
 
-        if parts.path_and_query.is_none() {
-            parts.path_and_query = Some("/".parse().unwrap());
+        if uri_parts.path_and_query.is_none() {
+            uri_parts.path_and_query = Some("/".parse().expect("Infallible"));
         }
 
         let https_host = host.replace(&ports.http.to_string(), &ports.https.to_string());
-        parts.authority = Some(https_host.parse()?);
+        uri_parts.authority = Some(https_host.parse()?);
 
-        Ok(Uri::from_parts(parts)?)
+        Ok(Uri::from_parts(uri_parts)?)
     }
 
     let redirect = move |Host(host): Host, uri: Uri| async move {
-        match make_https(host, uri, ports) {
+        match make_https(&host, uri, ports) {
             Ok(uri) => Ok(Redirect::permanent(&uri.to_string())),
             Err(error) => {
-                println!("Redirect error: {:?}", error);
+                println!("Redirect error: {error:?}");
                 Err(StatusCode::BAD_REQUEST)
             }
         }
     };
 
-    let listener = tokio::net::TcpListener::bind(format!("[::]:{}", ports.http)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("[::]:{}", ports.http)).await.expect("Failed to bind");
     axum::serve(listener, redirect.into_make_service())
         .await
-        .unwrap();
+        .expect("Server failed");
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -199,13 +197,13 @@ async fn perform_signout(jar: PrivateCookieJar) -> impl IntoResponse {
 
     let (mut parts, body) = res.into_parts();
 
-    parts.headers.append("HX-Redirect", "/".parse().unwrap());
+    parts.headers.append("HX-Redirect", "/".parse().expect("Infallible"));
 
     axum::response::Response::from_parts(parts, body)
 }
 
-async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Form(info): Form<SignInInfo>) -> impl IntoResponse {
-    let db = state.surreal.get().await.unwrap();
+async fn perform_signin(State(state): State<Context>, jar: PrivateCookieJar, Form(info): Form<SignInInfo>) -> Result<impl IntoResponse, crate::error::Error> {
+    let db = state.surreal.get().await?;
     
     let sign_res = db.signin(Scope {
         namespace: "demo",
@@ -230,23 +228,23 @@ async fn perform_signin(State(state): State<AppState>, jar: PrivateCookieJar, Fo
 
             let (mut parts, body) = res.into_parts();
 
-            parts.headers.append("HX-Redirect", "/".parse().unwrap());
+            parts.headers.append("HX-Redirect", "/".parse().expect("Infallible"));
             
-            axum::response::Response::from_parts(parts, body)
+            Ok(axum::response::Response::from_parts(parts, body))
         },
         Err(e) => {
-            println!("Auth error: {:?}", e);
-            (StatusCode::UNAUTHORIZED, html! {
+            println!("Auth error: {e:?}");
+            Ok((StatusCode::UNAUTHORIZED, html! {
                 div ."bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded relative" role="alert" {
                     "Invalid credentials."
                 }
-            }).into_response()
+            }).into_response())
         }
     }
 }
 
-async fn perform_signup(State(state): State<AppState>, jar: PrivateCookieJar, Form(info): Form<SignUpInfo>) -> impl IntoResponse {
-    let db = state.surreal.get().await.unwrap();
+async fn perform_signup(State(state): State<Context>, jar: PrivateCookieJar, Form(info): Form<SignUpInfo>) -> Result<impl IntoResponse, crate::error::Error> {
+    let db = state.surreal.get().await?;
     
     let sign_res = db.signup(Scope {
         namespace: "demo",
@@ -271,17 +269,17 @@ async fn perform_signup(State(state): State<AppState>, jar: PrivateCookieJar, Fo
 
             let (mut parts, body) = res.into_parts();
 
-            parts.headers.append("HX-Redirect", "/".parse().unwrap());
+            parts.headers.append("HX-Redirect", "/".parse().expect("Infallible"));
             
-            axum::response::Response::from_parts(parts, body)
+            Ok(axum::response::Response::from_parts(parts, body))
         },
         Err(e) => {
-            println!("Auth error: {:?}", e);
-            (StatusCode::UNAUTHORIZED, html! {
+            println!("Auth error: {e:?}");
+            Ok((StatusCode::UNAUTHORIZED, html! {
                 div ."bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded relative" role="alert" {
                     "Invalid credentials."
                 }
-            }).into_response()
+            }).into_response())
         }
     }
 }

@@ -1,42 +1,48 @@
-use deadpool::managed::{Manager, self, Pool};
+use deadpool::managed::{self, Pool};
 use deadpool::async_trait;
 use surrealdb::{Surreal, engine::remote::ws::{Client, Ws}};
 
 #[derive(Debug)]
-pub struct SPool {
+pub struct Manager {
     url: String
 }
 
-pub type SurrealPool = Pool<SPool>;
-pub type SurrealConn = managed::Object<SPool>;
+pub type SurrealManager = Pool<Manager>;
+pub type SurrealConnection = managed::Object<Manager>;
 
-impl SPool {
-    pub fn new(url: &str, size: usize) -> managed::Pool<SPool> {
-        Pool::builder(SPool { url: url.to_string() })
+impl Manager {
+    /// Create a new `Manager` that handles creating and recyling connections from a 
+    /// pool to a `SurrealDB` instance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the runtime cannot be initialized.
+    #[must_use]
+    pub fn new(url: &str, size: usize) -> managed::Pool<Manager> {
+        Pool::builder(Manager { url: url.to_string() })
             .max_size(size)
             .build()
-            .unwrap()
+            .expect("No runtime (tokio/async-std) specified")
     }
 }
 
 #[async_trait]
-impl Manager for SPool {
-    type Error = std::io::Error;
+impl managed::Manager for Manager {
+    type Error = crate::error::Error;
     type Type = Surreal<Client>;
 
     async fn create(&self) ->  Result<Self::Type, Self::Error> {
-        let db = Surreal::new::<Ws>(self.url.as_str()).await.unwrap();
+        let db = Surreal::new::<Ws>(self.url.as_str()).await?;
 
-        db.use_ns("demo").use_db("demo").await.unwrap();
+        db.use_ns("demo").use_db("demo").await?;
 
         Ok(db)
     }
 
     async fn recycle(&self, conn: &mut Self::Type, _: &managed::Metrics) -> managed::RecycleResult<Self::Error> {
 
-        conn.invalidate().await.unwrap();
-
-        conn.use_ns("demo").use_db("demo").await.unwrap();
+        conn.invalidate().await.map_err(Self::Error::from)?;
+        conn.use_ns("demo").use_db("demo").await.map_err(Self::Error::from)?;
 
         Ok(())
     }
